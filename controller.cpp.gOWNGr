@@ -1,0 +1,1835 @@
+#include "controller.h"
+#include "ui_controller.h"
+
+#include <QTimer>
+#include <fstream>
+
+Controller::Controller(QWidget *parent)
+    : QMainWindow(parent)
+    , ui(new Ui::Controller)
+{
+    // create the controller user interface
+    ui->setupUi(this);
+
+    Transmission = TRANSMISSION_IDLE;
+
+    // layout: athlete
+    QSpacerItem *raceBoxSpacer = new QSpacerItem(0, 0, QSizePolicy::Minimum, QSizePolicy::Expanding);
+    ui->raceBoxLayout->insertSpacerItem(-1, raceBoxSpacer);
+
+    // layout: device
+    QSpacerItem *deviceBoxSpacer = new QSpacerItem(0, 0, QSizePolicy::Minimum, QSizePolicy::Expanding);
+    ui->deviceBoxLayout->insertSpacerItem(-1, deviceBoxSpacer);
+
+    // read maximum number of athletes and initialise the athlete arrays
+    athleteLayout = new QHBoxLayout*[8];
+    athleteTime = new QLCDNumber*[8];
+    athleteName = new QLabel*[8];
+    athleteSurname = new QLabel*[8];
+    laneNumber = new QLabel*[8];
+    athleteSettings = new QPushButton*[8];
+    athleteDelete = new QPushButton*[8];
+    athleteSettingsData = new QString*[8];
+    athleteUpdateTimer = new QTimer*[8];
+    athleteTimer = new QElapsedTimer*[8];
+
+    for (int index = 0; index < 8; ++index)
+    {
+        athleteSettingsData[index] = NULL;
+    }
+
+    // read the maximum number of devices and initialise the device arrays
+    deviceLayout = new QHBoxLayout*[8];
+    deviceName = new QLabel*[8];
+    deviceAddress = new QLabel*[8];
+    deviceStatus = new QLabel*[8];
+    deviceSettingsStatus = new QLabel*[8];
+    deviceSettings = new QPushButton*[8];
+    deviceDelete = new QPushButton*[8];
+    deviceSettingsData = new QString*[8];
+    statusPix = new QPixmap*[8];
+    settingsPix = new QPixmap*[8];
+
+    //picturebuffer = new uint8_t*[8];
+
+    for (int index = 0; index < 8; ++index)
+    {
+        deviceSettingsData[index] = NULL;
+    }
+
+    // statusbar
+    statusPix1 = new QPixmap;
+    statusPix2 = new QPixmap;
+    statuslabel1 = new QLabel("Network:");
+    statuspic1 = new QLabel();
+    statuslabel2 = new QLabel("|");
+    statuslabel3 = new QLabel("Status:");
+    statuspic2 = new QLabel();
+    statusLayout = new QHBoxLayout();
+    container = new QWidget;
+
+    statuslabel1->setMinimumWidth(50);
+    statuslabel2->setMinimumWidth(0);
+    statuslabel3->setMinimumWidth(50);
+    statusLayout->addWidget(statuslabel1);
+    statusLayout->addWidget(statuspic1);
+    statusLayout->addWidget(statuslabel2);
+    statusLayout->addWidget(statuslabel3);
+    statusLayout->addWidget(statuspic2);
+    container->setLayout(statusLayout);
+    ui->statusbar->insertPermanentWidget(0, container);
+
+    statusPix1->load(":/pic/red.png");
+    statusPix1->setDevicePixelRatio(5);
+    statuspic1->setPixmap(*statusPix1);
+
+    statusPix2->load(":/pic/red.png");
+    statusPix2->setDevicePixelRatio(5);
+    statuspic2->setPixmap(*statusPix2);
+
+    // read the global configuration file
+    settingsFile(READ_SETTINGS);
+
+    // activate the network receive routine
+    receive();
+
+    // start the check alive timer
+    timer = new QTimer(this);
+    connect(timer, SIGNAL(timeout()), SLOT(checkAlive()));
+
+    pictureBufferLength1[0] = 0;
+    pictureBufferLength1[1] = 0;
+    pictureBufferLength1[2] = 0;
+    pictureBufferLength1[3] = 0;
+    pictureBufferLength1[4] = 0;
+    pictureBufferLength1[5] = 0;
+    pictureBufferLength1[6] = 0;
+    pictureBufferLength1[7] = 0;
+}
+
+Controller::~Controller()
+{
+    // delete the controller user interface
+    delete ui;
+}
+
+// begin settings
+// -------------------------------------------------------------------------------
+void Controller::settingsFile(int mode)
+{
+    // avaiable options in the settings file
+    std::string line, key, value, options[5];
+    options[0] = "resolution";
+    options[1] = "baud";
+    options[2] = "quality";
+    options[3] = "sensitivity";
+    options[4] = "automatic";
+
+    // open the file
+    std::fstream saved;
+    saved.open("settings.ini", std::fstream::in | std::fstream::out);
+
+    // if the file does not exist create and open a new one
+    if (saved.is_open() == 0)
+        saved.open("settings.ini", std::fstream::in | std::fstream::out | std::fstream::trunc);
+
+    switch (mode)
+    {
+        case READ_SETTINGS:
+        {
+            if (saved.is_open())
+            {
+                universalSettings = new QString[11];
+                while (std::getline(saved, line))
+                {
+                    if ((line[0] != '#') && (line.length() != 0))
+                    {
+                        key = line.substr(0, line.find_first_of(" "));
+                        value = line.substr(line.find_first_of(" ")+1, line.find_last_of('\n'));
+                        for (int index = 0; index < 5; index++)
+                        {
+                            if (options[index] == key)
+                            {
+                                universalSettings[index] = QString::fromStdString(value);
+                                break;
+                            }
+                        }
+
+                    }
+                }
+                if (universalSettings[4] == "1")
+                {
+                    // time
+                    universalSettings[5 ] = "0";
+                    universalSettings[6 ] = "0";
+                    universalSettings[7 ] = "0";
+                    // date
+                    universalSettings[8 ] = "0";
+                    universalSettings[9 ] = "0";
+                    universalSettings[10] = "0";
+                }
+            }
+            else universalSettings = NULL;
+            break;
+        }
+        case WRIT_SETTINGS:
+        {
+            if (saved.is_open())
+            {
+                saved << "# This is the configuration file for the Athletics Information System" << "\n";
+                for (int index = 0; index < 5; index++)
+                {
+                    // add comments
+                    switch (index)
+                    {
+                        case 0:
+                        {
+                            saved << "\n";
+                            saved << "# Camera" << "\n";
+                            break;
+                        }
+                        case 4:
+                        {
+                            saved << "\n";
+                            saved << "# Time" << "\n";
+                            break;
+                        }
+                    }
+                    // add values
+                    saved << options[index] << " " << universalSettings[index].toStdString() << "\n";
+                }
+            }
+            break;
+        }
+    }
+    // close the file
+    saved.close();
+}
+
+void Controller::updateHardware(int mode, int index)
+{
+    char address[6];
+
+    // create the device address
+    std::string ret = deviceSettingsData[index][1].toStdString();
+    address[0] = stoi(ret.substr(0 , 2), 0, 16);
+    address[1] = stoi(ret.substr(3 , 2), 0, 16);
+    address[2] = stoi(ret.substr(6 , 2), 0, 16);
+    address[3] = stoi(ret.substr(9 , 2), 0, 16);
+    address[4] = stoi(ret.substr(12, 2), 0, 16);
+    address[5] = stoi(ret.substr(15, 2), 0, 16);
+
+    switch (mode)
+    {
+        case UPDATE_SETT:
+        {
+            // switch state to unknown
+            settingsPix[index]->load(":/pic/red.png");
+            settingsPix[index]->setDevicePixelRatio(4);
+            deviceSettingsStatus[index]->setPixmap(*settingsPix[index]);
+
+            qDebug() << "update hardware: UPDATE_SETT" << index;
+            // declare the data array
+            char data[11];
+
+            // fill data array
+            data[0 ] = 0x42;
+            data[1 ] = universalSettings[0 ].toInt()+1;   // combo box 1
+            data[2 ] = universalSettings[1 ].toInt()+1;   // combo box 2
+            data[3 ] = universalSettings[2 ].toInt();
+            data[4 ] = universalSettings[3 ].toInt()+1;   // combo box 3
+
+            data[5 ] = universalSettings[5 ].toInt();
+            data[6 ] = universalSettings[6 ].toInt();
+            data[7 ] = universalSettings[7 ].toInt();
+
+            data[8 ] = universalSettings[8 ].toInt()-2000;
+            data[9 ] = universalSettings[9 ].toInt();
+            data[10] = universalSettings[10].toInt();
+
+            // transmit the data to the address
+            transmit(address, data, strlen(data));
+            std::chrono::milliseconds timespan(5);
+            std::this_thread::sleep_for(timespan);
+            break;
+        }
+        case DEVICE_PAIR:
+        {
+            // switch state to unknown
+            statusPix[index]->load(":/pic/red.png");
+            statusPix[index]->setDevicePixelRatio(4);
+            deviceStatus[index]->setPixmap(*statusPix[index]);
+
+            qDebug() << "update hardware: DEVICE_PAIR" << index;
+            // declare the data array
+            char data[11];
+
+            // fill the data array
+            data[0 ] = 0x48;
+
+            // transmit the data to the address
+            transmit(address, data, strlen(data));
+            std::chrono::milliseconds timespan(5);
+            std::this_thread::sleep_for(timespan);
+            break;
+        }
+        case PING_DEVICE:
+        {
+            // switch state to unknown
+            statusPix[index]->load(":/pic/red.png");
+            statusPix[index]->setDevicePixelRatio(4);
+            deviceStatus[index]->setPixmap(*statusPix[index]);
+
+            qDebug() << "transmit ping a: PING_DEVICE" << index;
+            // declare the data array
+            char data[11];
+
+            // fill the data array
+            data[0 ] = 0x47;
+
+            // transmit the data to the address
+            transmit(address, data, strlen(data));
+            std::chrono::milliseconds timespan(5);
+            std::this_thread::sleep_for(timespan);
+            break;
+        }
+        case SET_DEV_ARM:
+        {
+            // switch state to unknown
+            statusPix[index]->load(":/pic/red.png");
+            statusPix[index]->setDevicePixelRatio(4);
+            deviceStatus[index]->setPixmap(*statusPix[index]);
+
+            qDebug() << "transmit arme a: SET_DEV_ARM" << index;
+            // declare the data array
+            char data[11];
+
+            // fill the data array
+            data[0 ] = 0x40;
+
+            // transmit the data to the address
+            transmit(address, data, strlen(data));
+            std::chrono::milliseconds timespan(5);
+            std::this_thread::sleep_for(timespan);
+            break;
+        }
+        case SET_DEV_DIS:
+        {
+            // switch state to unknown
+            statusPix[index]->load(":/pic/red.png");
+            statusPix[index]->setDevicePixelRatio(4);
+            deviceStatus[index]->setPixmap(*statusPix[index]);
+
+            qDebug() << "transmit armd a: SET_DEV_DIS" << index;
+            // declare the data array
+            char data[11];
+
+            // fill the data array
+            data[0 ] = 0x41;
+
+            // transmit the data to the address
+            transmit(address, data, strlen(data));
+            std::chrono::milliseconds timespan(5);
+            std::this_thread::sleep_for(timespan);
+            break;
+        }
+        case ST_SP_CAMER:
+        {
+            // switch state to unknown
+            statusPix[index]->load(":/pic/red.png");
+            statusPix[index]->setDevicePixelRatio(4);
+            deviceStatus[index]->setPixmap(*statusPix[index]);
+
+            qDebug() << "transmit toggle: ST_SP_CAMER" << index;
+            // declare the data array
+            char data[11];
+
+            // fill the data array
+            data[0 ] = 0x49;
+
+            // transmit the data to the address
+            transmit(address, data, strlen(data));
+            std::chrono::milliseconds timespan(5);
+            std::this_thread::sleep_for(timespan);
+            break;
+        }
+        case TAKE_PICTUR:
+        {
+            // switch state to unknown
+            statusPix[index]->load(":/pic/red.png");
+            statusPix[index]->setDevicePixelRatio(4);
+            deviceStatus[index]->setPixmap(*statusPix[index]);
+
+            qDebug() << "transmit comand: TAKE_PICTUR" << index;
+            // declare the data array
+            char data[11];
+
+            // fill the data array
+            data[0 ] = 0x43;
+
+            // transmit the data to the address
+            transmit(address, data, strlen(data));
+            std::chrono::milliseconds timespan(5);
+            std::this_thread::sleep_for(timespan);
+            break;
+        }
+    }
+}
+// -------------------------------------------------------------------------------
+
+// begin menu
+// -------------------------------------------------------------------------------
+void Controller::on_actionAbout_triggered()
+{
+    // create and open the window
+    About *about = new About(this);
+    about->exec();
+    delete about;
+}
+
+void Controller::on_actionSettings_triggered()
+{
+    // read the global configuration file
+    settingsFile(READ_SETTINGS);
+
+    // create and open the window
+    Settings *settings = new Settings(this);
+    if (universalSettings != NULL)
+    {
+        // if loading configuration from file succeeded
+        // applyt settings to gui and delete
+        settings->setDialogData(universalSettings);
+        delete[] universalSettings;
+    }
+    int ret = settings->exec();
+
+    switch (ret)
+    {
+    case 0:
+        break;
+    case 1:
+        // assign new address to ret pointer
+        universalSettings = settings->getDialogData();
+        // write the new settings to the configuration file
+        settingsFile(WRIT_SETTINGS);
+
+        // search for added devices to transmit settings to
+        if (Transmission == TRANSMISSION_IN_PROGRESS)
+        {
+            //
+        }
+        else
+        {
+            Transmission = TRANSMISSION_IN_PROGRESS;
+            Controller::setEnabled(false);
+            for (int index = 0; index < 8; index++)
+            {
+                if (deviceSettingsData[index] != NULL)
+                {
+                    updateHardware(UPDATE_SETT, index);
+                }
+            }
+        }
+
+        break;
+    }
+
+    delete settings;
+}
+// -------------------------------------------------------------------------------
+
+// begin athlete
+// -------------------------------------------------------------------------------
+// create new athlete
+void Controller::on_actionNewAth_triggered()
+{
+    // get the data
+    Athlete *athlete = new Athlete(this);
+    athlete->setDialogData(athleteSettingsData, -1);
+    int ret = athlete->exec();
+
+    switch (ret)
+    {
+    case 0: // cancel
+        break;
+    case 1: // ok
+        QString *temp = athlete->getDialogData();
+        int index = temp[3].toInt();
+        if (athleteSettingsData[index] == NULL)
+        {
+            athleteSettingsData[index] = athlete->getDialogData();
+            createAthlete(index);
+        }
+        else
+        {
+            QMessageBox informationBox(this);
+            informationBox.setModal(1);
+            informationBox.setWindowTitle("Critical");
+            informationBox.setIcon(QMessageBox::Critical);
+            informationBox.setText("Invalid lane selection");
+            informationBox.setInformativeText("<small>The selected lane has alredy been used. Please select another lane.</small>");
+            informationBox.exec();
+        }
+        break;
+    }
+
+    // grabage collection
+    delete athlete;
+}
+
+// create athlete
+void Controller::athleteSettingsHandler()
+{
+    for (int index = 0; index < 8; ++index)
+    {
+        if (athleteSettings[index] == sender())
+        {
+            // get the data
+            Athlete *athlete = new Athlete(this);
+            athlete->setDialogData(athleteSettingsData, index);
+            int ret = athlete->exec();
+
+            switch (ret)
+            {
+            case 0: // cancel
+                break;
+            case 1: //ok
+                athleteSettingsData[index] = athlete->getDialogData();
+
+                athleteName[index]->setText(athleteSettingsData[index][0]);
+                athleteSurname[index]->setText(athleteSettingsData[index][1]);
+
+                int newindex = athleteSettingsData[index][3].toInt();
+                if (index != newindex)
+                {
+                    athleteSettingsData[newindex] = athleteSettingsData[index];
+                    deleteAthlete(index);
+                    athleteSettingsData[index] = NULL;
+                    createAthlete(newindex);
+                }
+                break;
+            }
+
+            // grabage collection
+            delete athlete;
+            break;
+        }
+    }
+}
+
+// delete athlete
+void Controller::athleteDeleteHandler()
+{
+    for (int index = 0; index < 8; ++index)
+    {
+        if (athleteDelete[index] == sender())
+        {
+            // call the function to delete the athlete at that index
+            deleteAthlete(index);
+            // delete the settings array for this user
+            delete[] athleteSettingsData[index];
+            // initialise the pointer with NULL
+            athleteSettingsData[index] = NULL;
+            break;
+        }
+    }
+}
+
+// load athletes
+void Controller::on_actionLoadAth_triggered()
+{
+    // setup the file dialog
+    QFileDialog fileDialog(this);
+    fileDialog.setModal(1);
+    fileDialog.setWindowTitle("Please select an athlete data file");
+    fileDialog.setNameFilter(tr("Data Files (*.ath *.ini)"));
+    fileDialog.setDirectory("/home/pieter/Documents/");
+
+    std::string line, key, value, options[4];
+    int index = 0;
+    options[0] = "name";
+    options[1] = "surname";
+    options[2] = "age";
+    options[3] = "lane";
+
+    if(fileDialog.exec())
+    {
+        // get the file name and path
+        QStringList fileName;
+        fileName = fileDialog.selectedFiles();
+
+        // open the file
+        std::fstream saved;
+        saved.open(fileName[0].toStdString(), std::fstream::in);
+        if (saved.is_open())
+        {
+            while (std::getline(saved, line))
+            {
+                if ((line[0] != '#') && (line.length() != 0))
+                {
+                    key = line.substr(0, line.find_first_of(" "));
+                    value = line.substr(line.find_first_of(" ")+1, line.find_last_of('\n'));
+
+                    if (key == "athlete")
+                    {
+                        index = stoi(value, 0, 10);
+                        if (athleteSettingsData[index] != NULL) delete[] athleteSettingsData[index];
+                        athleteSettingsData[index] = new QString[4];
+                    }
+
+                    for (int sub = 0; sub < 4; sub++)
+                    {
+                        if(options[sub] == key)
+                        {
+                            athleteSettingsData[index][sub] = QString::fromStdString(value);
+                        }
+                    }
+                }
+            }
+            saved.close();
+        }
+    }
+
+    for (int index = 0; index < 8; index++)
+    {
+        if (athleteSettingsData[index] != NULL)
+        {
+            createAthlete(index);
+        }
+    }
+
+}
+
+// create athlete widgets
+void Controller::createAthlete(int index)
+{
+    // create the new athlete components
+    athleteLayout[index] = new QHBoxLayout();
+    athleteName[index] = new QLabel(athleteSettingsData[index][0]);
+    athleteSurname[index] = new QLabel(athleteSettingsData[index][1]);
+    laneNumber[index] = new QLabel(athleteSettingsData[index][3]);
+    athleteSettings[index] = new QPushButton("Settings");
+    athleteDelete[index] = new QPushButton("Delete");
+    athleteTime[index] = new QLCDNumber();
+    athleteUpdateTimer[index] = new QTimer();
+    athleteTimer[index] = new QElapsedTimer();
+
+    athleteSettings[index]->setMaximumWidth(75);
+    athleteDelete[index]->setMaximumWidth(75);
+
+    // assign event handlers to the components
+    connect(athleteSettings[index], SIGNAL(clicked()), SLOT(athleteSettingsHandler()));
+    connect(athleteDelete[index], SIGNAL(clicked()), SLOT(athleteDeleteHandler()));
+    connect(athleteUpdateTimer[index], SIGNAL(timeout()), SLOT(updateTime()));
+
+    // add the components to the new layout
+    athleteLayout[index]->addWidget(laneNumber[index]);
+    athleteLayout[index]->addWidget(athleteName[index]);
+    athleteLayout[index]->addWidget(athleteSurname[index]);
+    athleteLayout[index]->addWidget(athleteSettings[index]);
+    athleteLayout[index]->addWidget(athleteDelete[index]);
+    athleteLayout[index]->addWidget(athleteTime[index]);
+
+    // assign the new layout to the user interface
+    ui->raceBoxLayout->insertLayout(index, athleteLayout[index]);
+}
+
+// delete athlete widgets
+void Controller::deleteAthlete(int index)
+{
+    athleteLayout[index]->removeWidget(athleteTime[index]);         // remove athlete lcd: time
+    athleteLayout[index]->removeWidget(laneNumber[index]);          // remove athlete label: lane number
+    athleteLayout[index]->removeWidget(athleteName[index]);         // remove athlete label: name
+    athleteLayout[index]->removeWidget(athleteSurname[index]);      // remove athlete label: surname
+    athleteLayout[index]->removeWidget(athleteSettings[index]);     // remove athlete button: settings
+    athleteLayout[index]->removeWidget(athleteDelete[index]);       // remove athlete button: delete
+
+    // disconnect signals
+    athleteSettings[index]->disconnect();
+    athleteDelete[index]->disconnect();
+
+    // remove layout
+    ui->raceBoxLayout->removeItem(athleteLayout[index]);
+
+    // delete the individual widgets and layouts
+    delete laneNumber[index];
+    delete athleteTime[index];
+    delete athleteName[index];
+    delete athleteSurname[index];
+    delete athleteSettings[index];
+    delete athleteDelete[index];
+    delete athleteLayout[index];
+    delete athleteUpdateTimer[index];
+    delete athleteTimer[index];
+}
+// -------------------------------------------------------------------------------
+
+// begin device
+// -------------------------------------------------------------------------------
+// create new device
+void Controller::on_actionNewDev_triggered()
+{
+    // get the data
+    Device *device = new Device(this);
+    device->setDialogData(deviceSettingsData, NULL, -1, -1);
+    int ret = device->exec();
+
+    switch (ret)
+    {
+    case 0: // cancel
+        break;
+    case 1: // ok
+
+        // start the update timer
+        if (timer->isActive() == 0)
+            timer->start(20000);
+
+        QString *temp = device->getDialogData();
+
+        if (Transmission == TRANSMISSION_IN_PROGRESS)
+        {
+            //
+        }
+        else
+        {
+            Transmission = TRANSMISSION_IN_PROGRESS;
+            Controller::setEnabled(false);
+            for (int index = 0; index < 8; index++)
+            {
+                if (deviceSettingsData[index] == NULL)
+                {
+                    // create the device
+                    deviceSettingsData[index] = temp;
+                    createDevice(index);
+
+                    updateHardware(DEVICE_PAIR, index);
+
+                    break;
+                }
+            }
+        }
+    }
+
+    // grabage collection
+    delete device;
+}
+
+// create device
+void Controller::deviceSettingsHandler()
+{
+    for (int index = 0; index < 8; ++index)
+    {
+        if (deviceSettings[index] == sender())
+        {
+            // get the data
+            Device *device = new Device(this);
+            device->setDialogData(deviceSettingsData, pictureBuffer1[index], pictureBufferLength1[index], index);
+            int ret = device->exec();
+
+            switch (ret)
+            {
+            case 0:
+                break;
+            case 1:
+                deviceSettingsData[index] = device->getDialogData();
+                deviceName[index]->setText(deviceSettingsData[index][0]);
+
+                int *test = device->getTestRequest();
+                if (test[0] == 1)
+                {
+                    qDebug() << 1;
+                }
+
+                if (test[1] == 1)
+                {
+                    qDebug() << 2;
+                    updateHardware(TAKE_PICTUR, index);
+                }
+
+                break;
+            }
+
+            // garbage collection
+            delete device;
+            break;
+        }
+    }
+}
+
+// delete device
+void Controller::deviceDeleteHandler()
+{
+    for (int index = 0; index < 8; ++index)
+    {
+        if (deviceDelete[index] == sender())
+        {
+            // call the function to delete the device at that index
+            deleteDevice(index);
+            // delete the settings array for this device
+            delete[] deviceSettingsData[index];
+            // initialise the pointer with NULL
+            deviceSettingsData[index] = NULL;
+            break;
+        }
+    }
+}
+
+// load devices
+void Controller::on_actionLoadDev_triggered()
+{
+    QFileDialog fileDialog(this);
+    fileDialog.setModal(1);
+    fileDialog.setWindowTitle("Please select a device data file");
+    fileDialog.setNameFilter(tr("Data Files (*.dev *.ini)"));
+    fileDialog.setDirectory("/home/pieter/Documents/");
+
+    std::string line, key, value, options[3];
+    int index = 0;
+    options[0] = "name";
+    options[1] = "address";
+    options[2] = "type";
+
+    if(fileDialog.exec())
+    {
+        // start the update timer
+        if (timer->isActive() == 0)
+            timer->start(20000);
+
+        // get the file name and path
+        QStringList fileName;
+        fileName = fileDialog.selectedFiles();
+
+        // open the file
+        std::fstream saved;
+        saved.open(fileName[0].toStdString(), std::fstream::in);
+        if (saved.is_open())
+        {
+            while (std::getline(saved, line))
+            {
+                if ((line[0] != '#') && (line.length() != 0))
+                {
+                    key = line.substr(0, line.find_first_of(" "));
+                    value = line.substr(line.find_first_of(" ")+1, line.find_last_of('\n'));
+
+                    if (key == "device")
+                    {
+                        index = stoi(value, 0, 10);
+                        if (deviceSettingsData[index] != NULL) delete[] deviceSettingsData[index];
+                        deviceSettingsData[index] = new QString[4];
+                    }
+
+                    for (int sub = 0; sub < 3; sub++)
+                    {
+                        if(options[sub] == key)
+                        {
+                            deviceSettingsData[index][sub] = QString::fromStdString(value);
+                        }
+                    }
+                }
+            }
+            saved.close();
+        }
+    }
+
+    if (Transmission == TRANSMISSION_IN_PROGRESS)
+    {
+        //
+    }
+    else
+    {
+        Transmission = TRANSMISSION_IN_PROGRESS;
+        Controller::setEnabled(false);
+        for (int index = 0; index < 8; index++)
+        {
+            if (deviceSettingsData[index] != NULL)
+            {
+                createDevice(index);
+                updateHardware(DEVICE_PAIR, index);     // pair the device
+            }
+        }
+    }
+
+}
+
+// create device widgets
+void Controller::createDevice(int index)
+{
+    deviceLayout[index] = new QHBoxLayout();
+    deviceName[index] = new QLabel(deviceSettingsData[index][0]);
+    deviceAddress[index] = new QLabel(deviceSettingsData[index][1]);
+    deviceStatus[index] = new QLabel();
+    deviceSettingsStatus[index] = new QLabel();
+    deviceSettings[index] = new QPushButton("Settings");
+    deviceDelete[index] = new QPushButton("Delete");
+    statusPix[index] = new QPixmap();
+    settingsPix[index] = new QPixmap();
+
+    statusPix[index]->load(":/pic/red.png");
+    statusPix[index]->setDevicePixelRatio(4);
+    deviceStatus[index]->setPixmap(*statusPix[index]);
+
+    settingsPix[index]->load(":/pic/red.png");
+    settingsPix[index]->setDevicePixelRatio(4);
+    deviceSettingsStatus[index]->setPixmap(*settingsPix[index]);
+
+    deviceSettings[index]->setMaximumWidth(75);
+    deviceDelete[index]->setMaximumWidth(75);
+
+    connect(deviceSettings[index], SIGNAL(clicked()), SLOT(deviceSettingsHandler()));
+    connect(deviceDelete[index], SIGNAL(clicked()), SLOT(deviceDeleteHandler()));
+
+    deviceLayout[index]->addWidget(deviceName[index]);
+    deviceLayout[index]->addWidget(deviceStatus[index]);
+    deviceLayout[index]->addWidget(deviceSettingsStatus[index]);
+    deviceLayout[index]->addWidget(deviceSettings[index]);
+    deviceLayout[index]->addWidget(deviceDelete[index]);
+
+    ui->deviceBoxLayout->insertLayout(index, deviceLayout[index]);
+}
+
+// delete device widgets
+void Controller::deleteDevice(int index)
+{
+    deviceLayout[index]->removeWidget(deviceName[index]);
+    deviceLayout[index]->removeWidget(deviceSettings[index]);
+    deviceLayout[index]->removeWidget(deviceDelete[index]);
+    deviceLayout[index]->removeWidget(deviceStatus[index]);
+    deviceLayout[index]->removeWidget(deviceSettingsStatus[index]);
+
+    deviceSettings[index]->disconnect();
+    deviceDelete[index]->disconnect();
+
+    ui->raceBoxLayout->removeItem(deviceLayout[index]);
+
+    delete deviceName[index];
+    delete deviceSettings[index];
+    delete deviceDelete[index];
+    delete deviceStatus[index];
+    delete deviceSettingsStatus[index];
+    delete statusPix[index];
+    delete deviceLayout[index];
+}
+// -------------------------------------------------------------------------------
+
+// begin exit
+// -------------------------------------------------------------------------------
+void Controller::on_actionExit_triggered()
+{
+    // create a message dialog
+    QMessageBox exitConfirmation(this);
+    exitConfirmation.setModal(1);
+    exitConfirmation.setWindowTitle("Question");
+    exitConfirmation.setIcon(QMessageBox::Question);
+    exitConfirmation.setText("Message 1");
+    exitConfirmation.setInformativeText("<small>Message 2 Message.</small>");
+    exitConfirmation.setStandardButtons(QMessageBox::No | QMessageBox::Yes);
+    exitConfirmation.setDefaultButton(QMessageBox::Yes);
+
+    // wait for the response
+    int ret = exitConfirmation.exec();
+    switch (ret)
+    {
+        // quit the program
+        case QMessageBox::Yes:
+            QCoreApplication::quit();
+            break;
+        // do nothing
+        case QMessageBox::No:
+            break;
+    }
+}
+// -------------------------------------------------------------------------------
+
+// begin network
+// -------------------------------------------------------------------------------
+void Controller::transmit(char* address, char* data, int size)
+{
+    int times = std::ceil((float)size/(float)1500);
+    int count = 0, prev = 0, t_size;
+
+    while (count < times)
+    {
+        //-----------------------------------------------------------------
+        prev = 1500*count;
+        if (count == (times-1))
+            t_size = size-((times-1)*1500);
+        else
+            t_size = 1500;
+        //-----------------------------------------------------------------
+
+        //-----------------------------------------------------------------
+        // socket id
+        int sock;
+        // buffer
+        char sendbuf[(t_size+14)];
+        // interface
+        struct ifreq if_idx;
+        struct ifreq if_mac;
+        char ifName[IFNAMSIZ] = "eno1";
+        // transmit
+        struct ether_header *eh = (struct ether_header *) sendbuf;
+        struct sockaddr_ll socket_address;
+
+        //-----------------------------------------------------------------
+
+        sock = socket(AF_PACKET, SOCK_RAW, htons(0xEEFA));
+
+        if(sock == -1)
+        {
+            // print debug message
+            ui->statusbar->showMessage("Socket Creation Failure");
+
+            // update status indicators
+            statusPix1->load(":/pic/red.png");
+            statusPix1->setDevicePixelRatio(5);
+            statuspic1->setPixmap(*statusPix1);
+            statusPix2->load(":/pic/red.png");
+            statusPix2->setDevicePixelRatio(5);
+            statuspic2->setPixmap(*statusPix2);
+        }
+        else
+        {
+            // update status indicators
+            statusPix1->load(":/pic/green.png");
+            statusPix1->setDevicePixelRatio(5);
+            statuspic1->setPixmap(*statusPix1);
+            statusPix2->load(":/pic/green.png");
+            statusPix2->setDevicePixelRatio(5);
+            statuspic2->setPixmap(*statusPix2);
+        }
+
+        // get the index of the interface
+        memset(&if_idx, 0, sizeof(struct ifreq));
+        strncpy(if_idx.ifr_name, ifName, IFNAMSIZ-1);
+        ioctl(sock, SIOCGIFINDEX, &if_idx);
+
+        // get the mac address of the interface
+        memset(&if_mac, 0, sizeof(struct ifreq));
+        strncpy(if_mac.ifr_name, ifName, IFNAMSIZ-1);
+        ioctl(sock, SIOCGIFHWADDR, &if_mac);
+
+        // clear the packet buffer
+        memset(sendbuf, 0, (t_size+14));
+
+        // ethernet header
+        eh->ether_shost[0] = ((uint8_t *)&if_mac.ifr_hwaddr.sa_data)[0];
+        eh->ether_shost[1] = ((uint8_t *)&if_mac.ifr_hwaddr.sa_data)[1];
+        eh->ether_shost[2] = ((uint8_t *)&if_mac.ifr_hwaddr.sa_data)[2];
+        eh->ether_shost[3] = ((uint8_t *)&if_mac.ifr_hwaddr.sa_data)[3];
+        eh->ether_shost[4] = ((uint8_t *)&if_mac.ifr_hwaddr.sa_data)[4];
+        eh->ether_shost[5] = ((uint8_t *)&if_mac.ifr_hwaddr.sa_data)[5];
+        eh->ether_dhost[0] = address[0];
+        eh->ether_dhost[1] = address[1];
+        eh->ether_dhost[2] = address[2];
+        eh->ether_dhost[3] = address[3];
+        eh->ether_dhost[4] = address[4];
+        eh->ether_dhost[5] = address[5];
+
+        // ethetype field
+        eh->ether_type = htons(0xEEFA);
+
+        // index of network address
+        socket_address.sll_ifindex = if_idx.ifr_ifindex;
+
+        // address length
+        socket_address.sll_halen = ETH_ALEN;
+
+
+        // fill the packet buffer
+        for (int index = 0; index < t_size; index++)
+        {
+            sendbuf[index+14] = data[index+prev];
+        }
+
+        // send packet
+        if (sendto(sock, sendbuf, (t_size+14), 0, (struct sockaddr*)&socket_address, sizeof(struct sockaddr_ll)) < 0)
+        {
+            // print debug message
+            ui->statusbar->showMessage("Transmission Failure");
+        }
+
+        ++count;
+    }
+}
+
+void Controller::receive(void)
+{
+    int sock;
+    sock = socket(AF_PACKET, SOCK_RAW, htons(0xEEFA));
+
+    if(sock == -1)
+    {
+        // print debug message
+        ui->statusbar->showMessage("Socket Creation Failure");
+
+        // update status indicators
+        statusPix1->load(":/pic/red.png");
+        statusPix1->setDevicePixelRatio(5);
+        statuspic1->setPixmap(*statusPix1);
+        statusPix2->load(":/pic/red.png");
+        statusPix2->setDevicePixelRatio(5);
+        statuspic2->setPixmap(*statusPix2);
+    }
+    else
+    {
+        // update status indicators
+        statusPix1->load(":/pic/green.png");
+        statusPix1->setDevicePixelRatio(5);
+        statuspic1->setPixmap(*statusPix1);
+        statusPix2->load(":/pic/green.png");
+        statusPix2->setDevicePixelRatio(5);
+        statuspic2->setPixmap(*statusPix2);
+    }
+
+    fcntl(sock, F_SETFL, fcntl(sock, F_GETFL, 0) | O_NONBLOCK);
+
+    QSocketNotifier *notifier = new QSocketNotifier(sock, QSocketNotifier::Read);
+    connect(notifier, SIGNAL(activated(int)), SLOT(receiveHandler(int)));
+}
+
+void Controller::receiveHandler(int socket)
+{
+    // re-enable the user interface
+    Transmission = TRANSMISSION_IDLE;
+    Controller::setEnabled(true);
+
+    // do something with the received data
+    uint8_t buff[1514];
+    int length;
+    while ((length = recv(socket, buff, 1514, 0)) >= 0)
+    {
+        qDebug() << "----------------------------------";
+        qDebug() << "Received" << length << "bytes";
+        qDebug() << buff[0] << buff[1] << buff[2] << buff[3] << buff[4] << buff[5] << buff[6] << buff[7] << buff[8] << buff[9] << buff[10] << buff[11] << buff[12] << buff[13] << buff[14] << buff[15] << buff[16];
+        qDebug() << buff[length-7] << buff[length-6] << buff[length-5] << buff[length-4] << buff[length-3] << buff[length-2] << buff[length-1];
+
+        // if image data has been retuned
+        // save image part 2, 3, 4 ...
+        if (more == 1)
+        {
+            for (int index = 0; index < 8; index++)
+            {
+                if (deviceSettingsData[index] != NULL)
+                {
+                    std::string ret = deviceSettingsData[index][1].toStdString();
+                    if ((stoi(ret.substr(0 , 2), 0, 16) == buff[6 ]) &&
+                        (stoi(ret.substr(3 , 2), 0, 16) == buff[7 ]) &&
+                        (stoi(ret.substr(6 , 2), 0, 16) == buff[8 ]) &&
+                        (stoi(ret.substr(9 , 2), 0, 16) == buff[9 ]) &&
+                        (stoi(ret.substr(12, 2), 0, 16) == buff[10]) &&
+                        (stoi(ret.substr(15, 2), 0, 16) == buff[11])  )
+                    {
+                        qDebug() << "STAGE 2";
+
+                        // update the total length
+                        int len = length - 14;
+                        pictureBufferLength1[index] = pictureBufferLength1[index] + len;
+
+                        // the length of the new data
+                        pictureBuffer1[index] = (uint8_t*)realloc(pictureBuffer1[index], pictureBufferLength1[index]*sizeof(uint8_t));
+                        memcpy(&pictureBuffer1[index][pictureBufferLength1[index]-len], &buff[14], len);
+
+                        int found = 0;
+                        for (int pair = 0; pair < pictureBufferLength1[index]-1 ; pair++)
+                        {
+                            if ((pictureBuffer1[index][pair+0] == 255) && (pictureBuffer1[index][pair+1] == 217))
+                            {
+                                found = 1;
+                            }
+                        }
+
+                        if (found)
+                        {
+                            more = 0;
+                            pictureBufferLength1[index] = pictureBufferLength1[index] - 5;
+                            qDebug() << "FINISHED";
+                        }
+                        else
+                        {
+                            more = 1;
+                            qDebug() << "MORE";
+                        }
+                    }
+                }
+            }
+        }
+
+        // if image data has been retuned
+        // save image part 1
+        if (buff[19] == 0xFF && buff[20] == 0xD8)
+        {
+            for (int index = 0; index < 8; index++)
+            {
+                if (deviceSettingsData[index] != NULL)
+                {
+                    std::string ret = deviceSettingsData[index][1].toStdString();
+                    if ((stoi(ret.substr(0 , 2), 0, 16) == buff[6 ]) &&
+                        (stoi(ret.substr(3 , 2), 0, 16) == buff[7 ]) &&
+                        (stoi(ret.substr(6 , 2), 0, 16) == buff[8 ]) &&
+                        (stoi(ret.substr(9 , 2), 0, 16) == buff[9 ]) &&
+                        (stoi(ret.substr(12, 2), 0, 16) == buff[10]) &&
+                        (stoi(ret.substr(15, 2), 0, 16) == buff[11])  )
+                    {
+                        qDebug() << "STAGE 1";
+
+                        // get data
+                        camera[index] = buff[15];
+                        int len = length - 14 - 5;
+                        uint8_t *temp = (uint8_t*)malloc(len*sizeof(uint8_t));
+                        if (temp)
+                        {
+                            // copy the data
+                            memcpy(temp, &buff[19], len);
+
+                            // search for end of file
+                            int found = 0;
+                            for (int pair = 0; pair < len-1 ; pair++)
+                            {
+                                if ((temp[pair+0] == 255) && (temp[pair+1] == 217))
+                                {
+                                    found = 1;
+                                }
+                            }
+
+                            // set next state
+                            if (found)
+                            {
+                                more = 0;
+                                len = len - 5;
+                                qDebug() << "FINISHED";
+                            }
+                            else
+                            {
+                                more = 1;
+                                qDebug() << "MORE";
+                            }
+
+                            if (camera[index] == 0)
+                            {
+                                pictureBuffer2[index] = temp;
+                                pictureBufferLength2[index] = len;
+                            }
+                            else
+                            {
+                                pictureBuffer1[index] = temp;
+                                pictureBufferLength1[index] = len;
+                            }
+                        }
+
+                        //int len = length - 14 - 5;
+                        //pictureBufferLength1[index] = len;
+                        //pictureBuffer1[index] = (uint8_t*)malloc(pictureBufferLength1[index]*sizeof(uint8_t));
+                        //memcpy(pictureBuffer1[index], &buff[19], len);
+
+                        //int found = 0;
+                        //for (int pair = 0; pair < pictureBufferLength1[index]-1 ; pair++)
+                        //{
+                       //     if ((pictureBuffer1[index][pair+0] == 255) && (pictureBuffer1[index][pair+1] == 217))
+                        //    {
+                       //         found = 1;
+                        //    }
+                       // }
+
+                       // if (found)
+                        //{
+                       //     more = 0;
+                      //      pictureBufferLength1[index] = pictureBufferLength1[index] - 5;
+                      //      qDebug() << "FINISHED";
+                      //  }
+                      //  else
+                      //  {
+                       //     more = 1;
+                       //     qDebug() << "MORE";
+                       // }
+                    }
+                }
+            }
+        }
+
+        // case 1
+        if ((buff[14] == 90) && (buff[15] == 72))
+        {
+            for (int index = 0; index < 8; index++)
+            {
+                if (deviceSettingsData[index] != NULL)
+                {
+                    std::string ret = deviceSettingsData[index][1].toStdString();
+                    if ((stoi(ret.substr(0 , 2), 0, 16) == buff[6 ]) &&
+                        (stoi(ret.substr(3 , 2), 0, 16) == buff[7 ]) &&
+                        (stoi(ret.substr(6 , 2), 0, 16) == buff[8 ]) &&
+                        (stoi(ret.substr(9 , 2), 0, 16) == buff[9 ]) &&
+                        (stoi(ret.substr(12, 2), 0, 16) == buff[10]) &&
+                        (stoi(ret.substr(15, 2), 0, 16) == buff[11])  )
+                    {
+                        // decode
+                        bool a = (buff[16] & 0b00000001) >> 0;
+                        bool b = (buff[16] & 0b00000010) >> 1;
+                        bool c = (buff[16] & 0b00000100) >> 2;
+                        bool d = (buff[16] & 0b00001000) >> 3;
+                        bool e = (buff[16] & 0b00010000) >> 4;
+                        bool f = (buff[16] & 0b00100000) >> 5;
+                        bool g = (buff[16] & 0b01000000) >> 6;
+                        bool h = (buff[16] & 0b10000000) >> 7;
+
+                        // print debug message
+                        if ((int)buff[16] > 0)
+                        {
+                            // statusbar message
+                            ui->statusbar->showMessage("Error Code: "+QString::number(buff[16]));
+                            // update status pictogram
+                            statusPix[index]->load(":/pic/orange.png");
+                            statusPix[index]->setDevicePixelRatio(4);
+                            deviceStatus[index]->setPixmap(*statusPix[index]);
+                            // debug output
+                            qDebug() << "ERROR: " << a << b << c << d << e << f << g << h;
+                        }
+                        else
+                        {
+                            // statusbar message
+                            ui->statusbar->clearMessage();
+                            // update status pictogram
+                            statusPix[index]->load(":/pic/green.png");
+                            statusPix[index]->setDevicePixelRatio(4);
+                            deviceStatus[index]->setPixmap(*statusPix[index]);
+                            // debug output
+                            qDebug() << "PAIR SUCCESS";
+                        }
+                        // if now message is received status pictogram stays red
+                    }
+                }
+            }
+        }
+
+        // case 2
+        if ((buff[14] == 90) && (buff[15] == 66))
+        {
+            for (int index = 0; index < 8; index++)
+            {
+                if (deviceSettingsData[index] != NULL)
+                {
+                    std::string ret = deviceSettingsData[index][1].toStdString();
+                    if ((stoi(ret.substr(0 , 2), 0, 16) == buff[6 ]) &&
+                        (stoi(ret.substr(3 , 2), 0, 16) == buff[7 ]) &&
+                        (stoi(ret.substr(6 , 2), 0, 16) == buff[8 ]) &&
+                        (stoi(ret.substr(9 , 2), 0, 16) == buff[9 ]) &&
+                        (stoi(ret.substr(12, 2), 0, 16) == buff[10]) &&
+                        (stoi(ret.substr(15, 2), 0, 16) == buff[11])  )
+                    {
+                        // decode
+                        bool a = (buff[16] & 0b00000001) >> 0;
+                        bool b = (buff[16] & 0b00000010) >> 1;
+                        bool c = (buff[16] & 0b00000100) >> 2;
+                        bool d = (buff[16] & 0b00001000) >> 3;
+                        bool e = (buff[16] & 0b00010000) >> 4;
+                        bool f = (buff[16] & 0b00100000) >> 5;
+                        bool g = (buff[16] & 0b01000000) >> 6;
+                        bool h = (buff[16] & 0b10000000) >> 7;
+
+                        // print debug message
+                        if ((int)buff[16] > 0)
+                        {
+                            // statusbar message
+                            ui->statusbar->showMessage("Error Code: "+QString::number(buff[16]));
+                            // update status pictogram
+                            settingsPix[index]->load(":/pic/orange.png");
+                            settingsPix[index]->setDevicePixelRatio(4);
+                            deviceSettingsStatus[index]->setPixmap(*settingsPix[index]);
+                            // debug output
+                            qDebug() << "ERROR: " << a << b << c << d << e << f << g << h;
+                        }
+                        else
+                        {
+                            // statusbar message
+                            ui->statusbar->clearMessage();
+                            // update status pictogram
+                            settingsPix[index]->load(":/pic/green.png");
+                            settingsPix[index]->setDevicePixelRatio(4);
+                            deviceSettingsStatus[index]->setPixmap(*settingsPix[index]);
+                            // debug output
+                            qDebug() << "SETT SUCCESS";
+                        }
+                        // if now message is received status pictogram stays red
+                    }
+                }
+            }
+        }
+
+        // case 2
+        if ((buff[14] == 90) && (buff[15] == 71))
+        {
+            for (int index = 0; index < 8; index++)
+            {
+                if (deviceSettingsData[index] != NULL)
+                {
+                    std::string ret = deviceSettingsData[index][1].toStdString();
+                    if ((stoi(ret.substr(0 , 2), 0, 16) == buff[6 ]) &&
+                        (stoi(ret.substr(3 , 2), 0, 16) == buff[7 ]) &&
+                        (stoi(ret.substr(6 , 2), 0, 16) == buff[8 ]) &&
+                        (stoi(ret.substr(9 , 2), 0, 16) == buff[9 ]) &&
+                        (stoi(ret.substr(12, 2), 0, 16) == buff[10]) &&
+                        (stoi(ret.substr(15, 2), 0, 16) == buff[11])  )
+                    {
+                        // decode
+                        bool a = (buff[16] & 0b00000001) >> 0;
+                        bool b = (buff[16] & 0b00000010) >> 1;
+                        bool c = (buff[16] & 0b00000100) >> 2;
+                        bool d = (buff[16] & 0b00001000) >> 3;
+                        bool e = (buff[16] & 0b00010000) >> 4;
+                        bool f = (buff[16] & 0b00100000) >> 5;
+                        bool g = (buff[16] & 0b01000000) >> 6;
+                        bool h = (buff[16] & 0b10000000) >> 7;
+
+                        // print debug message
+                        if ((int)buff[16] > 0)
+                        {
+                            // statusbar message
+                            ui->statusbar->showMessage("Error Code: "+QString::number(buff[16]));
+                            // update status pictogram
+                            statusPix[index]->load(":/pic/orange.png");
+                            statusPix[index]->setDevicePixelRatio(4);
+                            deviceStatus[index]->setPixmap(*statusPix[index]);
+                            // debug output
+                            qDebug() << "ERROR: " << a << b << c << d << e << f << g << h;
+                        }
+                        else
+                        {
+                            // statusbar message
+                            ui->statusbar->clearMessage();
+                            // update status pictogram
+                            statusPix[index]->load(":/pic/green.png");
+                            statusPix[index]->setDevicePixelRatio(4);
+                            deviceStatus[index]->setPixmap(*statusPix[index]);
+                            // debug output
+                            qDebug() << "PING SUCCESS";
+                        }
+                        // if now message is received status pictogram stays red
+                    }
+                }
+            }
+        }
+
+        // case 3
+        if ((buff[14] == 90) && (buff[15] == 64))
+        {
+            for (int index = 0; index < 8; index++)
+            {
+                if (deviceSettingsData[index] != NULL)
+                {
+                    std::string ret = deviceSettingsData[index][1].toStdString();
+                    if ((stoi(ret.substr(0 , 2), 0, 16) == buff[6 ]) &&
+                        (stoi(ret.substr(3 , 2), 0, 16) == buff[7 ]) &&
+                        (stoi(ret.substr(6 , 2), 0, 16) == buff[8 ]) &&
+                        (stoi(ret.substr(9 , 2), 0, 16) == buff[9 ]) &&
+                        (stoi(ret.substr(12, 2), 0, 16) == buff[10]) &&
+                        (stoi(ret.substr(15, 2), 0, 16) == buff[11])  )
+                    {
+                        // decode
+                        bool a = (buff[16] & 0b00000001) >> 0;
+                        bool b = (buff[16] & 0b00000010) >> 1;
+                        bool c = (buff[16] & 0b00000100) >> 2;
+                        bool d = (buff[16] & 0b00001000) >> 3;
+                        bool e = (buff[16] & 0b00010000) >> 4;
+                        bool f = (buff[16] & 0b00100000) >> 5;
+                        bool g = (buff[16] & 0b01000000) >> 6;
+                        bool h = (buff[16] & 0b10000000) >> 7;
+
+                        // print debug message
+                        if ((int)buff[16] > 0)
+                        {
+                            // statusbar message
+                            ui->statusbar->showMessage("Error Code: "+QString::number(buff[16]));
+                            // update status pictogram
+                            statusPix[index]->load(":/pic/orange.png");
+                            statusPix[index]->setDevicePixelRatio(4);
+                            deviceStatus[index]->setPixmap(*statusPix[index]);
+                            // debug output
+                            qDebug() << "ERROR: " << a << b << c << d << e << f << g << h;
+                        }
+                        else
+                        {
+                            // statusbar message
+                            ui->statusbar->clearMessage();
+                            // update status pictogram
+                            statusPix[index]->load(":/pic/green.png");
+                            statusPix[index]->setDevicePixelRatio(4);
+                            deviceStatus[index]->setPixmap(*statusPix[index]);
+                            // debug output
+                            qDebug() << "ARME SUCCESS";
+                        }
+                        // if now message is received status pictogram stays red
+                    }
+                }
+            }
+        }
+
+        // case 4
+        if ((buff[14] == 90) && (buff[15] == 65))
+        {
+            for (int index = 0; index < 8; index++)
+            {
+                if (deviceSettingsData[index] != NULL)
+                {
+                    std::string ret = deviceSettingsData[index][1].toStdString();
+                    if ((stoi(ret.substr(0 , 2), 0, 16) == buff[6 ]) &&
+                        (stoi(ret.substr(3 , 2), 0, 16) == buff[7 ]) &&
+                        (stoi(ret.substr(6 , 2), 0, 16) == buff[8 ]) &&
+                        (stoi(ret.substr(9 , 2), 0, 16) == buff[9 ]) &&
+                        (stoi(ret.substr(12, 2), 0, 16) == buff[10]) &&
+                        (stoi(ret.substr(15, 2), 0, 16) == buff[11])  )
+                    {
+                        // decode
+                        bool a = (buff[16] & 0b00000001) >> 0;
+                        bool b = (buff[16] & 0b00000010) >> 1;
+                        bool c = (buff[16] & 0b00000100) >> 2;
+                        bool d = (buff[16] & 0b00001000) >> 3;
+                        bool e = (buff[16] & 0b00010000) >> 4;
+                        bool f = (buff[16] & 0b00100000) >> 5;
+                        bool g = (buff[16] & 0b01000000) >> 6;
+                        bool h = (buff[16] & 0b10000000) >> 7;
+
+                        // print debug message
+                        if ((int)buff[16] > 0)
+                        {
+                            // statusbar message
+                            ui->statusbar->showMessage("Error Code: "+QString::number(buff[16]));
+                            // update status pictogram
+                            statusPix[index]->load(":/pic/orange.png");
+                            statusPix[index]->setDevicePixelRatio(4);
+                            deviceStatus[index]->setPixmap(*statusPix[index]);
+                            // debug output
+                            qDebug() << "ERROR: " << a << b << c << d << e << f << g << h;
+                        }
+                        else
+                        {
+                            // statusbar message
+                            ui->statusbar->clearMessage();
+                            // update status pictogram
+                            statusPix[index]->load(":/pic/green.png");
+                            statusPix[index]->setDevicePixelRatio(4);
+                            deviceStatus[index]->setPixmap(*statusPix[index]);
+                            // debug output
+                            qDebug() << "ARMD SUCCESS";
+                        }
+                        // if now message is received status pictogram stays red
+                    }
+                }
+            }
+        }
+
+        // case 4
+        if ((buff[14] == 90) && (buff[15] == 73))
+        {
+            for (int index = 0; index < 8; index++)
+            {
+                if (deviceSettingsData[index] != NULL)
+                {
+                    std::string ret = deviceSettingsData[index][1].toStdString();
+                    if ((stoi(ret.substr(0 , 2), 0, 16) == buff[6 ]) &&
+                        (stoi(ret.substr(3 , 2), 0, 16) == buff[7 ]) &&
+                        (stoi(ret.substr(6 , 2), 0, 16) == buff[8 ]) &&
+                        (stoi(ret.substr(9 , 2), 0, 16) == buff[9 ]) &&
+                        (stoi(ret.substr(12, 2), 0, 16) == buff[10]) &&
+                        (stoi(ret.substr(15, 2), 0, 16) == buff[11])  )
+                    {
+                        // decode
+                        bool a = (buff[16] & 0b00000001) >> 0;
+                        bool b = (buff[16] & 0b00000010) >> 1;
+                        bool c = (buff[16] & 0b00000100) >> 2;
+                        bool d = (buff[16] & 0b00001000) >> 3;
+                        bool e = (buff[16] & 0b00010000) >> 4;
+                        bool f = (buff[16] & 0b00100000) >> 5;
+                        bool g = (buff[16] & 0b01000000) >> 6;
+                        bool h = (buff[16] & 0b10000000) >> 7;
+
+                        // print debug message
+                        if ((int)buff[16] > 0)
+                        {
+                            // statusbar message
+                            ui->statusbar->showMessage("Error Code: "+QString::number(buff[16]));
+                            // update status pictogram
+                            statusPix[index]->load(":/pic/orange.png");
+                            statusPix[index]->setDevicePixelRatio(4);
+                            deviceStatus[index]->setPixmap(*statusPix[index]);
+                            // debug output
+                            qDebug() << "ERROR: " << a << b << c << d << e << f << g << h;
+                        }
+                        else
+                        {
+                            // statusbar message
+                            ui->statusbar->clearMessage();
+                            // update status pictogram
+                            statusPix[index]->load(":/pic/green.png");
+                            statusPix[index]->setDevicePixelRatio(4);
+                            deviceStatus[index]->setPixmap(*statusPix[index]);
+                            // debug output
+                            qDebug() << "TOGG SUCCESS";
+                        }
+                        // if now message is received status pictogram stays red
+                    }
+                }
+            }
+        }
+
+        // case 5
+        if ((buff[14] == 0x5A) && (buff[15] == 0x4A))
+        {
+            for (int index = 0; index < 8; index++)
+            {
+                if (deviceSettingsData[index] != NULL)
+                {
+                    std::string ret = deviceSettingsData[index][1].toStdString();
+                    if ((stoi(ret.substr(0 , 2), 0, 16) == buff[6 ]) &&
+                        (stoi(ret.substr(3 , 2), 0, 16) == buff[7 ]) &&
+                        (stoi(ret.substr(6 , 2), 0, 16) == buff[8 ]) &&
+                        (stoi(ret.substr(9 , 2), 0, 16) == buff[9 ]) &&
+                        (stoi(ret.substr(12, 2), 0, 16) == buff[10]) &&
+                        (stoi(ret.substr(15, 2), 0, 16) == buff[11])  )
+                    {
+                        // decode
+                        bool a = (buff[16] & 0b00000001) >> 0;
+                        bool b = (buff[16] & 0b00000010) >> 1;
+                        bool c = (buff[16] & 0b00000100) >> 2;
+                        bool d = (buff[16] & 0b00001000) >> 3;
+                        bool e = (buff[16] & 0b00010000) >> 4;
+                        bool f = (buff[16] & 0b00100000) >> 5;
+                        bool g = (buff[16] & 0b01000000) >> 6;
+                        bool h = (buff[16] & 0b10000000) >> 7;
+
+                        // print debug message
+                        if ((int)buff[16] > 0)
+                        {
+                            // statusbar message
+                            ui->statusbar->showMessage("Error Code: "+QString::number(buff[16]));
+                            // debug output
+                            qDebug() << "ERROR: " << a << b << c << d << e << f << g << h;
+                        }
+                        else
+                        {
+                            // stop the athlete timer
+                            athleteTimer[index]->invalidate();
+
+                            // statusbar message
+                            ui->statusbar->clearMessage();
+                            // debug output
+                            qDebug() << "STOP";
+                        }
+                        // if now message is received status pictogram stays red
+                    }
+                }
+            }
+        }
+
+        // case 6
+        // take test picture
+        if ((buff[14] == 0x5A) && (buff[15] == 0x43))
+        {
+            for (int index = 0; index < 8; index++)
+            {
+                if (deviceSettingsData[index] != NULL)
+                {
+                    std::string ret = deviceSettingsData[index][1].toStdString();
+                    if ((stoi(ret.substr(0 , 2), 0, 16) == buff[6 ]) &&
+                        (stoi(ret.substr(3 , 2), 0, 16) == buff[7 ]) &&
+                        (stoi(ret.substr(6 , 2), 0, 16) == buff[8 ]) &&
+                        (stoi(ret.substr(9 , 2), 0, 16) == buff[9 ]) &&
+                        (stoi(ret.substr(12, 2), 0, 16) == buff[10]) &&
+                        (stoi(ret.substr(15, 2), 0, 16) == buff[11])  )
+                    {
+                        // decode
+                        bool a = (buff[16] & 0b00000001) >> 0;
+                        bool b = (buff[16] & 0b00000010) >> 1;
+                        bool c = (buff[16] & 0b00000100) >> 2;
+                        bool d = (buff[16] & 0b00001000) >> 3;
+                        bool e = (buff[16] & 0b00010000) >> 4;
+                        bool f = (buff[16] & 0b00100000) >> 5;
+                        bool g = (buff[16] & 0b01000000) >> 6;
+                        bool h = (buff[16] & 0b10000000) >> 7;
+
+                        // print debug message
+                        if ((int)buff[16] > 0)
+                        {
+                            // statusbar message
+                            ui->statusbar->showMessage("Error Code: "+QString::number(buff[16]));
+                            // update status pictogram
+                            statusPix[index]->load(":/pic/orange.png");
+                            statusPix[index]->setDevicePixelRatio(4);
+                            deviceStatus[index]->setPixmap(*statusPix[index]);
+                            // debug output
+                            qDebug() << "ERROR: " << a << b << c << d << e << f << g << h;
+                        }
+                        else
+                        {
+                            // statusbar message
+                            ui->statusbar->clearMessage();
+                            // update status pictogram
+                            statusPix[index]->load(":/pic/green.png");
+                            statusPix[index]->setDevicePixelRatio(4);
+                            deviceStatus[index]->setPixmap(*statusPix[index]);
+                            // debug output
+                            qDebug() << "TAKE SUCCESS";
+                        }
+                        // if now message is received status pictogram stays red
+                    }
+                }
+            }
+        }
+
+        // case 7
+        // start all the timers
+        if ((buff[14] == 0xFF) && (buff[15] == 0xFF))
+        {
+            qDebug() << "Synchronised Start";
+
+            // stop the checkalive timer
+            timer->stop();
+
+            // start the cameras
+            if (Transmission == TRANSMISSION_IN_PROGRESS)
+            {
+                //
+            }
+            else
+            {
+                Transmission = TRANSMISSION_IN_PROGRESS;
+                Controller::setEnabled(false);
+                for (int index = 0; index < 8; index++)
+                {
+                    if (deviceSettingsData[index] != NULL)
+                    {
+                        updateHardware(ST_SP_CAMER, index);
+                    }
+                }
+            }
+
+            // start the timers
+            for (int index = 0; index < 8; index++)
+            {
+                athleteTimer[index]->start();
+            }
+            // use the trigger box as the pacer
+            athleteUpdateTimer[0]->start(100);
+        }
+
+        qDebug() << "----------------------------------";
+    }
+}
+
+void Controller::checkAlive()
+{
+    /*
+    int flag = 1;
+    if (Transmission == TRANSMISSION_IN_PROGRESS)
+    {
+        //
+    }
+    else
+    {
+        Transmission = TRANSMISSION_IN_PROGRESS;
+        Controller::setEnabled(false);
+        for (int index = 0; index < 8; index++)
+        {
+            if (deviceSettingsData[index] != NULL)
+            {
+                updateHardware(PING_DEVICE, index);
+                flag = 0;
+            }
+        }
+    }
+
+    if (flag)
+    {
+        // start the update timer
+        if (timer->isActive() == 0)
+            timer->stop();
+    }
+    */
+}
+// -------------------------------------------------------------------------------
+
+
+void Controller::on_RaceStart_clicked()
+{
+    if (Transmission == TRANSMISSION_IN_PROGRESS)
+    {
+        //
+    }
+    else
+    {
+        Transmission = TRANSMISSION_IN_PROGRESS;
+        Controller::setEnabled(false);
+        for (int index = 0; index < 8; index++)
+        {
+            if (deviceSettingsData[index] != NULL)
+            {
+                updateHardware(SET_DEV_ARM, index);
+            }
+        }
+    }
+
+    // clear the timers
+    for (int index = 0; index < 8; index++)
+    {
+        if (athleteTime[index] != NULL)
+        {
+            int time = 0;
+            athleteTime[index]->display(QString::number(time));
+        }
+    }
+}
+
+void Controller::on_RaceStop_clicked()
+{
+    // stop all the timers
+    for (int index = 0; index < 8; index++)
+    {
+        athleteTimer[index]->invalidate();
+    }
+    athleteUpdateTimer[0]->stop();
+
+    // stop the cameras
+    if (Transmission == TRANSMISSION_IN_PROGRESS)
+    {
+        //
+    }
+    else
+    {
+        Transmission = TRANSMISSION_IN_PROGRESS;
+        Controller::setEnabled(false);
+        for (int index = 0; index < 8; index++)
+        {
+            if (deviceSettingsData[index] != NULL)
+            {
+                updateHardware(ST_SP_CAMER, index);
+            }
+        }
+    }
+
+    // clear the timers
+    for (int index = 0; index < 8; index++)
+    {
+        if (athleteTime[index] != NULL)
+        {
+            int time = 0;
+            athleteTime[index]->display(QString::number(time));
+        }
+    }
+
+    // start the checkalive timer
+    timer->start(20000);
+}
+
+
+void Controller::updateTime()
+{
+    for (int index = 0; index < 8; index++)
+    {
+        if (athleteTimer[index] != NULL)
+        {
+            if (athleteTimer[index]->isValid())
+            {
+                int time = athleteTimer[index]->elapsed();
+                athleteTime[index]->display(QString::number(time));
+            }
+        }
+    }
+}
