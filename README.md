@@ -9,6 +9,7 @@ The project can be compiled by opening the .pro file in Qt Creator. The project 
 ## Image
 A screenshot of the main windows is given below:
 ![alt text](https://github.com/sonbesie/final_year_project_software/blob/main/window_man.jpg?raw=true)
+
 A screenshot of the device window is given below:
 ![alt text](https://github.com/sonbesie/final_year_project_software/blob/main/window_dev.jpg?raw=true)
 
